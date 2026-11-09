@@ -1,0 +1,89 @@
+#!/bin/sh
+# ==============================================================================
+# 适用平台: ImmortalWrt 25.12.2 正式稳定版 (x86_64 物理机)
+# 作用: 首次开机网络自适应、Firewall4 配置、无密登录、TTYD免密与 apk 源规范
+# ==============================================================================
+
+# 1. 网络配置：扫描所有 x86 物理网口 (ethX)
+ETH_DEVS=$(ls -d /sys/class/net/eth* 2>/dev/null | sed 's|.*/||' | sed 's/eth//' | sort -n -u | sed 's/^/eth/')
+if [ -z "$ETH_DEVS" ]; then
+    ETH_DEVS=$(grep -o 'eth[0-9]*' /etc/config/network 2>/dev/null | sed 's/eth//' | sort -n -u | sed 's/^/eth/')
+fi
+ETH_COUNT=$(echo "$ETH_DEVS" | grep -c '^eth')
+
+# 彻底清理原有残留的 br-lan device 节点
+while true; do
+    OLD_SEC=$(uci show network 2>/dev/null | grep "\.name='br-lan'" | head -n 1 | cut -d'.' -f2)
+    [ -z "$OLD_SEC" ] && break
+    uci -q delete network.${OLD_SEC}
+done
+
+if [ "$ETH_COUNT" -ge 2 ]; then
+    # 多网口物理机：最后一个作为 WAN，其余物理网口全部桥接进 br-lan
+    WAN_DEV=$(echo "$ETH_DEVS" | tail -n 1)
+    uci set network.wan.device="$WAN_DEV"
+
+    # 重建标准网桥
+    uci set network.br_lan=device
+    uci set network.br_lan.name='br-lan'
+    uci set network.br_lan.type='bridge'
+    uci -q delete network.br_lan.ports
+
+    for dev in $ETH_DEVS; do
+        if [ "$dev" != "$WAN_DEV" ]; then
+            uci add_list network.br_lan.ports="$dev"
+        fi
+    done
+
+    uci set network.lan.device='br-lan'
+    uci set network.wan.peerdns='0'
+    uci -q delete network.wan.dns
+    uci add_list network.wan.dns='223.5.5.5'
+    uci add_list network.wan.dns='119.29.29.29'
+    uci -q delete network.wan6
+else
+    # 单网口物理机保底：强制为 LAN，避免断网变砖
+    uci set network.lan.device='eth0'
+    uci -q delete network.wan
+    uci -q delete network.wan6
+fi
+uci commit network
+
+# 2. 防火墙配置：适配 25.12 Firewall4 (nftables)
+uci -q set firewall.@defaults[0].fullcone='1'
+uci -q set firewall.@defaults[0].flow_offloading='1'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+
+# 遍历定位 WAN 区域开启 FullCone NAT
+for z in $(uci show firewall | grep "=zone" | cut -d'.' -f2 | cut -d'=' -f1); do
+    if [ "$(uci -q get firewall.${z}.name)" = "wan" ]; then
+        uci -q set firewall.${z}.fullcone='1'
+    fi
+done
+uci commit firewall
+
+# 3. 允许 root 密码及空密码通过 SSH 登录
+uci set dropbear.@dropbear[0].PasswordAuth='1'
+uci set dropbear.@dropbear[0].RootPasswordAuth='1'
+uci commit dropbear
+
+# 4. 清除 root 密码实现开机无密登录；仅在 passwd 不可用时使用备用写法
+if ! passwd -d root 2>/dev/null; then
+    sed -i 's|^root:[^:]*:|root::|' /etc/shadow 2>/dev/null || true
+fi
+
+# 5. 配置 TTYD 网页终端免密直接登录
+if [ -f "/etc/config/ttyd" ]; then
+    uci -q set ttyd.@ttyd[0].command='/bin/login -f root'
+    uci commit ttyd
+    [ -x "/etc/init.d/ttyd" ] && /etc/init.d/ttyd restart >/dev/null 2>&1
+fi
+
+# 6. 软件源规范化：屏蔽官方 target/kmods 源及不存在的 video 源，避免自定义内核安装不匹配的官方 kmod
+for f in /etc/apk/repositories /etc/apk/repositories.d/*.list /etc/opkg/distfeeds.conf; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    sed -i -E '/(targets\/x86\/64\/packages|video\/packages\.adb)/d' "$f"
+    sed -i -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d' "$f"
+done
+
+exit 0

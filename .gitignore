@@ -1,0 +1,13 @@
+*.tmp
+*.bak
+*.old
+*~
+.DS_Store
+Thumbs.db
+openwrt/
+bin/
+build_dir/
+staging_dir/
+tmp/
+dl/
+firmware/

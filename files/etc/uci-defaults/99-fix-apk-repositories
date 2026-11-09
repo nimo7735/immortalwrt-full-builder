@@ -1,0 +1,40 @@
+#!/bin/sh
+for repo_file in /etc/apk/repositories.d/*.list /etc/apk/repositories; do
+    if [ -f "$repo_file" ]; then
+        sed -i -E '/(custom|video)\/packages\.adb/d' "$repo_file" 2>/dev/null || true
+    fi
+done
+# 确保 customfeeds.list 与实际安装组件精准动态对应，按需保留 @daed 与 @honk 软件源
+if [ -f /etc/apk/repositories.d/customfeeds.list ]; then
+    if apk info -e daed >/dev/null 2>&1 || apk info -e luci-app-daede >/dev/null 2>&1; then
+        grep -q "@daed" /etc/apk/repositories.d/customfeeds.list 2>/dev/null || echo "@daed https://down.dllkids.xyz/openwrt-feed/25.12/x86_64/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
+    else
+        sed -i '/@daed/d' /etc/apk/repositories.d/customfeeds.list 2>/dev/null || true
+    fi
+    if apk info -e honk >/dev/null 2>&1 || apk info -e luci-app-honk >/dev/null 2>&1; then
+        grep -q "@honk" /etc/apk/repositories.d/customfeeds.list 2>/dev/null || echo "@honk https://down.dllkids.xyz/openwrt-feed/25.12/x86_64/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
+    else
+        sed -i '/@honk/d' /etc/apk/repositories.d/customfeeds.list 2>/dev/null || true
+    fi
+fi
+# 仅当固件实际安装了 daed / luci-app-daede 时，才在 world 清单中绑定 @daed 标签
+for pkg in daed luci-app-daede; do
+    if apk info -e "$pkg" >/dev/null 2>&1; then
+        if grep -q "^${pkg}$" /etc/apk/world 2>/dev/null; then
+            sed -i "s/^${pkg}$/${pkg}@daed/" /etc/apk/world
+        elif ! grep -q "^${pkg}@daed" /etc/apk/world 2>/dev/null; then
+            echo "${pkg}@daed" >> /etc/apk/world
+        fi
+    fi
+done
+# 若固件实际安装了 honk / luci-app-honk 时，world 清单中绑定 @honk 标签
+for pkg in honk luci-app-honk; do
+    if apk info -e "$pkg" >/dev/null 2>&1; then
+        if grep -q "^${pkg}$" /etc/apk/world 2>/dev/null; then
+            sed -i "s/^${pkg}$/${pkg}@honk/" /etc/apk/world
+        elif ! grep -q "^${pkg}@honk" /etc/apk/world 2>/dev/null; then
+            echo "${pkg}@honk" >> /etc/apk/world
+        fi
+    fi
+done
+exit 0

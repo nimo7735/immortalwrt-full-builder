@@ -1,0 +1,239 @@
+name: Build ImmortalWrt Firmware (Full)
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      upload_release:
+        description: '发布到 GitHub Releases (Publish to GitHub Releases)'
+        required: false
+        default: true
+        type: boolean
+      upload_artifact:
+        description: '上传至 GitHub Actions Artifact (Upload to Actions Artifacts)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt.git
+  REPO_BRANCH: openwrt-25.12
+  EXPECTED_RELEASE: 25.12.2
+  CONFIG_FILE: full.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: 检出当前仓库代码 (Checkout Repository)
+      uses: actions/checkout@v4
+
+    - name: 释放 Runner 磁盘空间 (Free Disk Space)
+      run: |
+        echo "=================================================="
+        echo "--> 正在深度清理 Runner 预装冗余组件以释放磁盘空间..."
+        echo "=================================================="
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force 2>/dev/null || true
+        sudo swapoff -a 2>/dev/null || true
+        sudo rm -f /swapfile 2>/dev/null || true
+        echo "--> 清理完成！当前可用磁盘空间："
+        df -h
+
+    - name: 初始化编译环境与依赖 (Initialize Build Environment)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        echo "=================================================="
+        echo "--> 正在安装 OpenWrt / ImmortalWrt 编译所需依赖工具链..."
+        echo "=================================================="
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install -y \
+          ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext \
+          gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 \
+          libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+          libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
+          mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 \
+          python3-pip python3-ply python3-docutils qemu-utils re2c rsync scons \
+          squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget \
+          xmlto xxd zlib1g-dev clang llvm libbpf-dev
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: 克隆 ImmortalWrt 主系统源码 (Clone ImmortalWrt Source)
+      working-directory: /workdir
+      run: |
+        echo "=================================================="
+        echo "--> 同步 ImmortalWrt 官方维护分支 (${REPO_BRANCH})..."
+        echo "=================================================="
+        df -h
+        git clone -b $REPO_BRANCH --single-branch $REPO_URL openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: 执行 DIY Part 1 订阅与插件注入 (Run DIY Part 1)
+      run: |
+        cd /workdir/openwrt
+        [ -e $GITHUB_WORKSPACE/$DIY_P1_SH ] && chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH && $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    - name: 更新并安装 Feeds 扩展包 (Update & Install Feeds)
+      run: |
+        cd /workdir/openwrt
+        echo "=================================================="
+        echo "--> 正在更新官方 Feeds 软件源..."
+        echo "=================================================="
+        ./scripts/feeds update -a
+
+        echo "--> 正在剔除 custom-apps 已替代的官方同名冲突包..."
+        rm -rf feeds/packages/net/{daed,daede,dae,rtp2httpd}
+        rm -rf feeds/luci/applications/{luci-app-daed,luci-app-daede,luci-app-dae,luci-app-rtp2httpd}
+
+        echo "--> 正在安装 Feeds 软件包..."
+        ./scripts/feeds install -a
+        rm -rf package/feeds/packages/{daed,daede,dae,rtp2httpd}
+        rm -rf package/feeds/luci/{luci-app-daed,luci-app-daede,luci-app-dae,luci-app-rtp2httpd}
+
+    - name: 加载并校验 full.config 编译配置 (Load & Validate full.config)
+      run: |
+        cd /workdir/openwrt
+        echo "=================================================="
+        echo "--> 正在载入核心全量编译配置: $CONFIG_FILE"
+        echo "=================================================="
+        cp -f "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+        sed -i -E '/^CONFIG_LINUX_6_[0-9]+=/d' .config
+        sed -i -E '/^CONFIG_FEED_video=/d' .config
+        echo "# CONFIG_FEED_video is not set" >> .config
+        sed -i -E '/^CONFIG_VERSION_NUMBER=/d; /^CONFIG_VERSION_REPO=/d' .config
+        echo "CONFIG_VERSION_NUMBER=\"${EXPECTED_RELEASE}\"" >> .config
+        echo "CONFIG_VERSION_REPO=\"https://downloads.immortalwrt.org/releases/${EXPECTED_RELEASE}\"" >> .config
+        
+        make defconfig
+        if ! grep -q '^CONFIG_TARGET_x86_64=y' .config; then
+          echo "[ERROR] 配置非 x86_64 目标架构！" >&2
+          exit 1
+        fi
+
+    - name: 执行 DIY Part 2 补丁与系统优化 (Run DIY Part 2)
+      run: |
+        cd /workdir/openwrt
+        [ -e $GITHUB_WORKSPACE/$DIY_P2_SH ] && chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH && $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    - name: 预下载依赖软件包 (Download DL Package Sources)
+      run: |
+        cd /workdir/openwrt
+        echo "=================================================="
+        echo "--> 启动多线程预下载源码包 (make download)..."
+        echo "=================================================="
+        make download -j8
+        find dl -size -1024c -exec ls -l {} +
+        find dl -size -1024c -exec rm -f {} +
+
+    - name: 启动多核编译构建固件 (Compile Firmware)
+      id: compile
+      run: |
+        cd /workdir/openwrt
+        echo "=================================================="
+        echo "--> 启动多核全速编译 [$(nproc) 线程]..."
+        echo "=================================================="
+        if make -j$(nproc); then
+          echo "编译成功！"
+        else
+          echo "[WARN] 多核构建报错，自动切换单核模式输出详细日志..."
+          rm -rf tmp/
+          make -j1 V=s
+        fi
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: 智能过滤并归集最终固件 (Organize & Filter Firmware)
+      id: organize
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd /workdir/openwrt
+        target_dir=$(find bin/targets/ -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -n 1)
+        if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
+          # 1. 彻底清除 rootfs、kernel.bin、manifest 等非 combined 产物
+          find "$target_dir" -maxdepth 1 -type f ! -name "*combined*.img.gz" -exec rm -f {} +
+
+          # 2. 动态读取当前生效的 .config，精准比对所选固件类型
+          cfg_bios=0; grep -q "^CONFIG_GRUB_IMAGES=y" .config 2>/dev/null && cfg_bios=1
+          cfg_efi=0; grep -q "^CONFIG_GRUB_EFI_IMAGES=y" .config 2>/dev/null && cfg_efi=1
+          cfg_squashfs=0; grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null && cfg_squashfs=1
+          cfg_ext4=0; grep -q "^CONFIG_TARGET_ROOTFS_EXT4FS=y" .config 2>/dev/null && cfg_ext4=1
+
+          if [ "$cfg_bios" -eq 0 ]; then
+            echo "--> 清理未启用传统 BIOS 镜像..."
+            find "$target_dir" -maxdepth 1 -type f -name "*combined.img.gz" ! -name "*-efi.img.gz" -exec rm -f {} +
+          fi
+          if [ "$cfg_efi" -eq 0 ]; then
+            echo "--> 清理未启用 UEFI 镜像..."
+            find "$target_dir" -maxdepth 1 -type f -name "*-efi.img.gz" -exec rm -f {} +
+          fi
+          if [ "$cfg_ext4" -eq 0 ]; then
+            find "$target_dir" -maxdepth 1 -type f -name "*ext4*" -exec rm -f {} +
+          fi
+          if [ "$cfg_squashfs" -eq 0 ]; then
+            find "$target_dir" -maxdepth 1 -type f -name "*squashfs*" -exec rm -f {} +
+          fi
+
+          mkdir -p $GITHUB_WORKSPACE/firmware
+          cp -f "$target_dir"/*.img.gz $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
+          cd $GITHUB_WORKSPACE/firmware
+          sha256sum *.img.gz > sha256sums.txt 2>/dev/null || true
+          
+          echo "=================================================="
+          echo "--> 最终构建产物清单："
+          ls -lh
+          echo "=================================================="
+
+          echo "FIRMWARE_PATH=$GITHUB_WORKSPACE/firmware" >> $GITHUB_ENV
+          BUILD_TAG="ImmortalWrt-Full-25.12-$(date +'%Y%m%d-%H%M')"
+          echo "RELEASE_TAG=$BUILD_TAG" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "[ERROR] 未能定位目标输出目录 bin/targets/ !" >&2
+          exit 1
+        fi
+
+    - name: 上传固件至 Actions 产物 (Upload Artifact)
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_artifact != 'false')
+      with:
+        name: ${{ env.RELEASE_TAG }}
+        path: ${{ env.FIRMWARE_PATH }}/*
+        retention-days: 14
+
+    - name: 发布固件至 GitHub Releases (Publish Release)
+      uses: softprops/action-gh-release@v2
+      if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_release != 'false')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.RELEASE_TAG }}
+        name: ${{ env.RELEASE_TAG }}
+        body: |
+          ### 🔥 ImmortalWrt 25.12.2 x86_64 全能功能版 (Linux 6.12 LTS - full.config)
+          - **底座版本**：ImmortalWrt 25.12.2 (openwrt-25.12 官方最新维护分支)
+          - **内核版本**：Linux 6.12 LTS (开启 CONFIG_KERNEL_DEBUG_INFO_BTF 原生 BTF)
+          - **选用配置**：`full.config` (全量全能版)
+          - **核心特性**：
+            - 原生 eBPF Daede / Honk 双引擎按需选用
+            - 突破 208KB 远古套接字限制，64MB 满血网络栈调优
+            - 纯血 Firewall4 (fw4) + Nftables + FullCone NAT1
+            - 原生 Linux 内核态 WireGuard
+            - 开机网络自适应与 TTYD 免密登录
+          - **文件校验**：请比对附件中的 `sha256sums.txt`
+        files: |
+          ${{ env.FIRMWARE_PATH }}/*
