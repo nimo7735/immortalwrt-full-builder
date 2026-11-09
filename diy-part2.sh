@@ -32,6 +32,36 @@ if [ -f "include/bpf.mk" ]; then
   fi
 fi
 
+# 3.1 修复 daed / dae 源码硬编码 go >= 1.27.0 导致与系统官方内置 go 1.26 工具链冲突
+python3 -c '
+import os
+targets = [
+    ("openwrt-daede/daed/Makefile", "DAED_BUILD_DIR"),
+    ("openwrt-daede/dae/Makefile", "DAE_BUILD_DIR")
+]
+for rel_path, bdir in targets:
+    for base in ["package/custom-apps", "custom-apps", "package/feeds/custom", "feeds/custom"]:
+        mf = os.path.join(base, rel_path)
+        if os.path.exists(mf):
+            try:
+                with open(mf, "r", encoding="utf-8") as f:
+                    content = f.read()
+                target_marker = "\t$(TAR) --strip-components=1"
+                hook = f"\tfind $({bdir}) -type f -name \"go.mod\" -exec sed -i -E '\''s/^go 1\\.[0-9]+(\\.[0-9]+)?/go 1.26/g; /^toolchain /d'\'' {{}} +"
+                if target_marker in content and hook not in content:
+                    lines = content.splitlines(True)
+                    new_lines = []
+                    for line in lines:
+                        new_lines.append(line)
+                        if line.startswith(target_marker):
+                            new_lines.append(hook + "\n")
+                    with open(mf, "w", encoding="utf-8") as f:
+                        f.writelines(new_lines)
+                    print(f"[+] 成功为 {mf} 注入 Go 1.26 自动兼容补丁")
+            except Exception as e:
+                print(f"[!] 注入 {mf} 补丁异常: {e}")
+' 2>/dev/null || true
+
 # 4. 修复 luci-app-daede 与 luci-app-honk 在线热更新脚本，适配带 @tag 仓库标签的 apk 依赖约束
 for upd_sh in package/custom-apps/openwrt-daede/luci-app-daede/root/usr/share/luci-app-daede/update-pkg.sh \
               package/custom-apps/openwrt-honk/luci-app-honk/root/usr/share/luci-app-honk/update-pkg.sh; do
