@@ -14,6 +14,9 @@ on:
         required: false
         default: true
         type: boolean
+  schedule:
+    # 每天北京时间凌晨 03:00 (UTC 19:00) 自动触发全新编译，跟进官方最新维护分支与上游插件
+    - cron: '0 19 * * *'
 
 permissions:
   contents: write
