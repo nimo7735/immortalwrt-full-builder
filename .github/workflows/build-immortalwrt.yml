@@ -101,12 +101,12 @@ jobs:
         ./scripts/feeds update -a
 
         echo "--> 正在剔除 custom-apps 已替代的官方同名冲突包..."
-        rm -rf feeds/packages/net/{daed,daede,dae,rtp2httpd}
+        rm -rf feeds/packages/net/{daed,daede,dae,rtp2httpd,v2ray-geodata}
         rm -rf feeds/luci/applications/{luci-app-daed,luci-app-daede,luci-app-dae,luci-app-rtp2httpd}
 
         echo "--> 正在安装 Feeds 软件包..."
         ./scripts/feeds install -a
-        rm -rf package/feeds/packages/{daed,daede,dae,rtp2httpd}
+        rm -rf package/feeds/packages/{daed,daede,dae,rtp2httpd,v2ray-geodata}
         rm -rf package/feeds/luci/{luci-app-daed,luci-app-daede,luci-app-dae,luci-app-rtp2httpd}
 
     - name: 加载并校验 full.config 编译配置 (Load & Validate full.config)

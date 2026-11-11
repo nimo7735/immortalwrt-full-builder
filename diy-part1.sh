@@ -22,6 +22,12 @@ echo "--> 正在同步外部自定义插件仓库..."
 [ ! -d "package/custom-apps/rtp2httpd" ] && git clone --depth=1 https://github.com/stackia/rtp2httpd.git package/custom-apps/rtp2httpd || true
 [ ! -d "package/custom-apps/openwrt-honk" ] && git clone --depth=1 https://github.com/kenzok8/openwrt-honk.git package/custom-apps/openwrt-honk || true
 
+# 同步 Passwall 官方维护的最权威 Loyalsoldier v2ray-geodata 规则包 (支持 telegram 标签)
+echo "--> 正在同步 Loyalsoldier v2ray-geodata 规则包定义..."
+mkdir -p package/custom-apps/v2ray-geodata
+curl -fsSL "https://raw.githubusercontent.com/Openwrt-Passwall/openwrt-passwall-packages/main/v2ray-geodata/Makefile" \
+  -o package/custom-apps/v2ray-geodata/Makefile
+
 # 4. 注册 custom 本地 Feed
 sed -i -E '/^[[:space:]]*src-link[[:space:]]+custom[[:space:]]+/d' feeds.conf.default
 printf '\nsrc-link custom %s/package/custom-apps\n' "$PWD" >> feeds.conf.default

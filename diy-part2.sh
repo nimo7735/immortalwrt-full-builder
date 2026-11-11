@@ -19,6 +19,9 @@ if [ -f "include/scan.mk" ]; then
   sed -i -E 's/\bmv[[:space:]]+(\$\(TMP_DIR\)\/\.\$\(SCAN_TARGET\)\.tmp)/mv -f \1/g' include/scan.mk 2>/dev/null || true
 fi
 
+# 2.1 彻底剔除 official feeds 中可能残留的旧版 v2ray-geodata，防止软链接冲突或覆盖
+rm -rf feeds/packages/net/v2ray-geodata package/feeds/packages/v2ray-geodata 2>/dev/null || true
+
 # 3. 幂等适配 include/bpf.mk：自动探测系统 Clang/LLVM BPF 路径（优先检索 /usr/bin 与 /usr/lib/llvm-*/bin）
 if [ -f "include/bpf.mk" ]; then
   if ! grep -q 'LLVM_PATH:=$(or $(shell for path in /usr/bin' include/bpf.mk 2>/dev/null; then
