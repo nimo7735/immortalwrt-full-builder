@@ -60,8 +60,11 @@ jobs:
         echo "=================================================="
         echo "--> 正在安装 OpenWrt / ImmortalWrt 编译所需依赖工具链..."
         echo "=================================================="
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install -y \
+        sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+        for i in 1 2 3; do
+          sudo -E apt-get -qq update && break || sleep 3
+        done
+        sudo -E apt-get -qq install -y --fix-missing \
           ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
           bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext \
           gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 \
@@ -210,15 +213,8 @@ jobs:
           exit 1
         fi
 
-    - name: 上传固件至 Actions 产物 (Upload Artifact)
-      uses: actions/upload-artifact@v4
-      if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_artifact != 'false')
-      with:
-        name: ${{ env.RELEASE_TAG }}
-        path: ${{ env.FIRMWARE_PATH }}/*
-        retention-days: 14
-
     - name: 发布固件至 GitHub Releases (Publish Release)
+      id: release
       uses: softprops/action-gh-release@v2
       if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_release != 'false')
       env:
@@ -240,3 +236,27 @@ jobs:
           - **文件校验**：请比对附件中的 `sha256sums.txt`
         files: |
           ${{ env.FIRMWARE_PATH }}/*
+
+    - name: 自动清理历史旧版本 Releases (Clean Older Releases)
+      if: steps.release.outcome == 'success' || steps.organize.outputs.status == 'success'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "=================================================="
+        echo "--> 正在清理历史旧版本 Releases，仅保留最新编译版本..."
+        echo "=================================================="
+        gh release list --limit 50 --json tagName --jq '.[1:][].tagName' | while read -r tag; do
+          if [ -n "$tag" ]; then
+            echo "--> 正在删除历史旧版本: $tag"
+            gh release delete "$tag" --cleanup-tag --yes 2>/dev/null || true
+          fi
+        done
+
+    - name: 上传固件至 Actions 产物 (Upload Artifact)
+      uses: actions/upload-artifact@v4
+      continue-on-error: true
+      if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_artifact != 'false')
+      with:
+        name: ${{ env.RELEASE_TAG }}
+        path: ${{ env.FIRMWARE_PATH }}/*
+        retention-days: 14
