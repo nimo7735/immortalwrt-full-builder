@@ -34,16 +34,16 @@ echo "--> 正在同步外部自定义插件仓库..."
 # 同步 Passwall 官方维护的最权威 Loyalsoldier v2ray-geodata 规则包 (支持 telegram 标签)
 echo "--> 正在同步 Loyalsoldier v2ray-geodata 规则包定义..."
 mkdir -p package/custom-apps/v2ray-geodata
-curl -fsSL "https://raw.githubusercontent.com/Openwrt-Passwall/openwrt-passwall-packages/main/v2ray-geodata/Makefile"   -o package/custom-apps/v2ray-geodata/Makefile
+curl -fsSL "https://raw.githubusercontent.com/Openwrt-Passwall/openwrt-passwall-packages/main/v2ray-geodata/Makefile" \
+  -o package/custom-apps/v2ray-geodata/Makefile
 
 # 规避 Alpine apk 因 12 位与 14 位时间戳判定失准导致的假更新：版本号尾部补齐 00 秒数对齐 14 位规范
-sed -i -E 's/(VERSION:=\$\(GEO(SITE|IP)_VER\))(\.\$\(PKG_RELEASE\))/@/' package/custom-apps/v2ray-geodata/Makefile
+sed -i -E 's/VERSION:=\$\(GEOSITE_VER\)\.\$\(PKG_RELEASE\)/VERSION:=\$\(GEOSITE_VER\)00.\$\(PKG_RELEASE\)/' package/custom-apps/v2ray-geodata/Makefile
+sed -i -E 's/VERSION:=\$\(GEOIP_VER\)\.\$\(PKG_RELEASE\)/VERSION:=\$\(GEOIP_VER\)00.\$\(PKG_RELEASE\)/' package/custom-apps/v2ray-geodata/Makefile
 
 # 5. 注册 custom 本地 Feed
 sed -i -E '/^[[:space:]]*src-link[[:space:]]+custom[[:space:]]+/d' feeds.conf.default
-printf '
-src-link custom %s/package/custom-apps
-' "$PWD" >> feeds.conf.default
+printf '\nsrc-link custom %s/package/custom-apps\n' "$PWD" >> feeds.conf.default
 
 echo "--> DIY Part 1 执行完成！feeds.conf.default 配置如下："
 cat feeds.conf.default
